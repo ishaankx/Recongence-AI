@@ -1,10 +1,5 @@
 # --- PROFESSIONAL LOAN RISK PREDICTOR (STREAMLIT APP) ---
-# This app loads the trained XGBoost model and the preprocessing pipeline 
-# (saved as joblib files) to make real-time, explainable loan default predictions.
-#
-# INSTRUCTIONS: Save this code as 'risk_predictor_app.py' and upload it 
-# along with 'xgb_risk_model.joblib', 'preprocessor.joblib', and 'requirements.txt' 
-# to your GitHub repository for Streamlit Cloud deployment.
+# FIX: Restricting input features to the exact 15 columns present in the Loan_default.csv header.
 
 import streamlit as st
 import pandas as pd
@@ -18,11 +13,19 @@ import os
 MODEL_FILE = 'xgb_risk_model.joblib'
 PREPROCESSOR_FILE = 'preprocessor.joblib'
 
+# The 15 input features based on the Loan_default.csv header (excluding LoanID and Default)
+CORE_INPUT_FEATURES = [
+    'Age', 'Income', 'LoanAmount', 'CreditScore', 'MonthsEmployed', 
+    'NumCreditLines', 'InterestRate', 'LoanTerm', 'DTIRatio', 
+    'Education', 'EmploymentType', 'MaritalStatus', 'HasMortgage', 
+    'HasDependents', 'LoanPurpose', 'HasCoSigner'
+]
+
+
 # Load artifacts using Streamlit's caching feature for efficiency
 @st.cache_resource
 def load_artifacts():
     """Loads the preprocessor pipeline and the trained XGBoost model."""
-    # Check if files exist (CRITICAL for successful Streamlit deployment)
     if not os.path.exists(MODEL_FILE) or not os.path.exists(PREPROCESSOR_FILE):
         st.error("Model or Preprocessor files not found. Please ensure 'xgb_risk_model.joblib' and 'preprocessor.joblib' are in the same directory and pushed to GitHub.")
         return None, None
@@ -31,7 +34,8 @@ def load_artifacts():
         preprocessor = joblib.load(PREPROCESSOR_FILE)
         return model, preprocessor
     except Exception as e:
-        st.error(f"Error loading artifacts: {e}")
+        # Re-raise the error for better debugging if not a known issue
+        st.error(f"Error loading artifacts: {e}. Check scikit-learn version in requirements.txt (should be 1.6.1).")
         return None, None
 
 model, preprocessor = load_artifacts()
@@ -40,21 +44,21 @@ model, preprocessor = load_artifacts()
 
 def make_prediction(raw_data, model, preprocessor):
     """
-    Takes raw user input, applies the full MLOps pipeline (Feature Engineering & Preprocessing), 
-    and returns the prediction. The Feature Engineering step MUST match the training script exactly.
+    Takes raw user input, applies the full MLOps pipeline, and returns the prediction.
     """
     
     # 1. Convert raw input dictionary to a DataFrame
     input_df = pd.DataFrame([raw_data])
     
-    # 2. Re-engineer Features (Matching the training script)
+    # 2. Re-engineer Features (MUST match the training script exactly)
     
     # a) Financial Ratio: Loan-to-Income (LTI)
+    # Uses 'Income' and 'LoanAmount'
     input_df['LTI_Ratio'] = input_df['LoanAmount'] / input_df['Income'].replace(0, np.nan)
-    # Safely handle any new NaNs introduced during the division (e.g., if income was 0)
     input_df['LTI_Ratio'].fillna(input_df['LTI_Ratio'].median() if not input_df['LTI_Ratio'].median() is np.nan else 0, inplace=True)
     
     # b) Flag Imputation for DTIRatio
+    # Uses 'DTIRatio'
     if 'DTIRatio' in input_df.columns:
         input_df['DTI_MISSING_FLAG'] = input_df['DTIRatio'].isnull().astype(int)
     else:
@@ -66,10 +70,10 @@ def make_prediction(raw_data, model, preprocessor):
         labels = ['<25', '25-35', '36-45', '46-55', '>55']
         input_df['Age_Group'] = pd.cut(input_df['Age'], bins=bins, labels=labels, right=True, include_lowest=True)
         input_df['Age_Group'] = input_df['Age_Group'].astype(object).fillna('Age_Missing')
-        # Drop original Age, keep Age_Group
+        # Drop original Age, keep Age_Group (THIS COLUMN DROP IS CRITICAL FOR THE PIPELINE)
         input_df.drop(columns=['Age'], inplace=True) 
     
-    # 3. Apply Preprocessor Pipeline (scales, encodes)
+    # 3. Apply Preprocessor Pipeline (cleans, scales, and encodes all features)
     X_processed = preprocessor.transform(input_df)
     
     # 4. Predict Probability of Default (PD)
@@ -90,49 +94,61 @@ st.sidebar.header("Applicant Financial Profile")
 
 if model and preprocessor:
     with st.sidebar.form("input_form"):
-        # Financial Inputs
-        income = st.slider("Annual Income ($)", 20000, 300000, 75000, 1000)
-        loan_amount = st.slider("Loan Amount Requested ($)", 1000, 200000, 25000, 1000)
-        credit_score = st.slider("Credit Score (FICO)", 300, 850, 680)
-        interest_rate = st.slider("Interest Rate (%)", 3.0, 30.0, 12.5, 0.1)
-        dti_ratio = st.slider("Debt-to-Income (DTI)", 0.0, 1.0, 0.35, 0.01)
-        loan_term = st.selectbox("Loan Term (Months)", [12, 24, 36, 48, 60, 84])
+        # --- Financial Inputs ---
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            income = st.slider("Annual Income ($)", 20000, 300000, 75000, 1000, key='income')
+            loan_amount = st.slider("Loan Amount Requested ($)", 1000, 200000, 25000, 1000, key='loan_amount')
+            credit_score = st.slider("Credit Score (FICO)", 300, 850, 680, key='credit_score')
+        with col_f2:
+            interest_rate = st.slider("Interest Rate (%)", 3.0, 30.0, 12.5, 0.1, key='interest_rate')
+            dti_ratio = st.slider("Debt-to-Income (DTI)", 0.0, 1.0, 0.35, 0.01, key='dti_ratio')
+            loan_term = st.selectbox("Loan Term (Months)", [12, 24, 36, 48, 60, 84], key='loan_term')
 
-        # Demographic/History Inputs
-        age = st.slider("Applicant Age", 18, 90, 35) # Used to create Age_Group
-        months_employed = st.slider("Months Employed", 0, 360, 60)
-        num_credit_lines = st.slider("Number of Credit Lines", 1, 15, 3)
+        st.subheader("Demographic & History")
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            age = st.slider("Applicant Age", 18, 90, 35, key='age') # Used for Age_Group engineering
+            months_employed = st.slider("Months Employed", 0, 360, 60, key='months_employed')
+            num_credit_lines = st.slider("Number of Credit Lines", 1, 15, 3, key='num_credit_lines')
+        with col_d2:
+            education = st.selectbox("Education Level", ['Bachelor\'s', 'Master\'s', 'High School', 'PhD', 'Other'], key='education')
+            marital_status = st.selectbox("Marital Status", ['Married', 'Single', 'Divorced'], key='marital_status')
+            employment_type = st.selectbox("Employment Type", ['Full-time', 'Self-employed', 'Part-time', 'Unemployed', 'Retired', 'Other'], key='employment_type')
 
-        # Categorical Inputs (Must match labels in the training data)
-        employment_status = st.selectbox("Employment Type", ['Full-time', 'Self-employed', 'Part-time', 'Unemployed', 'Retired'])
-        marital_status = st.selectbox("Marital Status", ['Married', 'Single', 'Divorced'])
-        loan_purpose = st.selectbox("Loan Purpose", ['Business', 'Education', 'Home Improvement', 'Other', 'Auto'])
-
-        # Placeholder binary features (Yes/No)
-        has_mortgage = st.selectbox("Has Mortgage?", ['Yes', 'No'])
-        has_dependents = st.selectbox("Has Dependents?", ['Yes', 'No'])
-        has_cosigner = st.selectbox("Has Co-Signer?", ['Yes', 'No'])
+        st.subheader("Loan Details & Flags")
+        col_l1, col_l2, col_l3 = st.columns(3)
+        with col_l1:
+            loan_purpose = st.selectbox("Loan Purpose", ['Business', 'Education', 'Home Improvement', 'Auto', 'Other'], key='loan_purpose')
+        with col_l2:
+            has_mortgage = st.selectbox("Has Mortgage?", ['Yes', 'No'], key='has_mortgage')
+            has_dependents = st.selectbox("Has Dependents?", ['Yes', 'No'], key='has_dependents')
+        with col_l3:
+            has_cosigner = st.selectbox("Has Co-Signer?", ['Yes', 'No'], key='has_cosigner')
+            st.empty() # Placeholder
+        
 
         submitted = st.form_submit_button("Predict Risk")
 
         # --- Prediction Logic ---
         if submitted:
-            # Create a dictionary of raw input matching the feature names used during training
+            # CREATE RAW INPUT DICTIONARY WITH **EXACT COLUMN NAMES** FROM THE CSV
             raw_input = {
+                'Age': age, 
                 'Income': income, 
                 'LoanAmount': loan_amount, 
                 'CreditScore': credit_score, 
-                'InterestRate': interest_rate,
-                'DTIRatio': dti_ratio,
-                'LoanTerm': loan_term,
-                'Age': age, 
                 'MonthsEmployed': months_employed, 
-                'NumCreditLines': num_credit_lines,
-                'EmploymentStatus': employment_status, 
-                'MaritalStatus': marital_status,
-                'LoanPurpose': loan_purpose,
+                'NumCreditLines': num_credit_lines, 
+                'InterestRate': interest_rate, 
+                'LoanTerm': loan_term, 
+                'DTIRatio': dti_ratio,
+                'Education': education, 
+                'EmploymentType': employment_type, 
+                'MaritalStatus': marital_status, 
                 'HasMortgage': has_mortgage, 
-                'HasDependents': has_dependents,
+                'HasDependents': has_dependents, 
+                'LoanPurpose': loan_purpose, 
                 'HasCoSigner': has_cosigner
             }
 
@@ -142,7 +158,6 @@ if model and preprocessor:
             # --- Display Prediction Results ---
             st.markdown("### Risk Assessment Result")
             
-            # Define Risk Threshold (This is a business decision based on the bank's risk appetite)
             RISK_THRESHOLD = 0.15 
             
             if pd_score > RISK_THRESHOLD:
@@ -171,10 +186,10 @@ if model and preprocessor:
 
             # --- Explainable AI (XAI) Placeholder ---
             st.markdown("### 🔍 Model Interpretability (Explainable AI - XAI)")
-            st.info("This section proves why the model made its decision, crucial for bank compliance. For a professional project, you would integrate the **SHAP library** here.")
+            st.info("This section proves why the model made its decision, crucial for bank compliance. For a professional project, you would integrate the SHAP library here.")
             st.markdown(f"**Mock Score Drivers for PD Score of {pd_score * 100:.2f}%:**")
             
-            # Mock Explanation logic (replace with real SHAP)
+            # Mock Explanation logic
             if credit_score < 620:
                 st.write(f"- Low Credit Score of **{credit_score}** significantly **pushed the risk score higher**.")
             if dti_ratio > 0.4:
@@ -183,7 +198,7 @@ if model and preprocessor:
                  st.write(f"- **High Income** relative to a **Small Loan Amount** resulted in a **very low risk assessment**.")
 
 else:
-    st.warning("Model files are still loading or failed to load. Please check artifact paths and ensure all files are in the repository.")
+    st.warning("Model files are still loading or failed to load. Please check artifact paths and ensure scikit-learn version is correctly pinned to 1.6.1 in requirements.txt.")
 
 # --- MLOps Metadata (Footer) ---
 st.sidebar.markdown("---")
