@@ -144,12 +144,18 @@ model, preprocessor, load_err = load_artifacts()
 # -------------------------------------------------------
 # HEADER
 # -------------------------------------------------------
+# HEADER
 st.markdown("""
-<div style="text-align:center; margin-bottom: 35px;">
+<div style="text-align:center; margin-bottom: 10px;">
     <div class="app-title">Recongence AI</div>
     <div class="subtext">Enterprise Credit Risk Intelligence Engine</div>
 </div>
 """, unsafe_allow_html=True)
+
+st.markdown("<hr style='border: 0.5px solid #1f2329; margin-bottom: 25px;'>", unsafe_allow_html=True)
+
+# Now main layout starts normally:
+left, right = st.columns([1.1, 0.9])
 
 
 # -------------------------------------------------------
